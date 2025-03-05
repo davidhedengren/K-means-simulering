@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>K-means Klustring - 2D/3D Interaktiv Demo</title>
+  <style>
+    /* Grundläggande stilar */
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f8f9fa;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .dashboard {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+    .controls-panel {
+      flex: 1;
+      min-width: 300px;
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .control-group {
+      margin-bottom: 20px;
+    }
+    .control-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #4a6fa5;
+    }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .checkbox-label input {
+      margin-right: 8px;
+    }
+    button {
+      background-color: #4a6fa5;
+      color: #fff;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 5px;
+      width: 100%;
+      font-size: 1rem;
+    }
+    button.secondary {
+      background-color: #61b15a;
+    }
+    input[type="number"],
+    input[type="range"] {
+      margin-top: 5px;
+      width: 100%;
+      padding: 5px;
+      font-size: 1rem;
+    }
+    .canvas-container {
+      flex: 2;
+      position: relative;
+    }
+    canvas {
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      display: block;
+    }
+    .plotly-container {
+      display: none;
+      width: 100%;
+      height: 600px;
+      margin-top: 20px;
+    }
+    .info-panel {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-top: 20px;
+    }
+  </style>
+  <!-- Inkludera Plotly -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>K-means Klustring</h1>
+      <p class="subtitle">Interaktiv demonstration med stöd för 2D och 3D data</p>
+    </header>
+    
+    <div class="dashboard">
+      <div class="controls-panel">
+        <!-- Dimension- och 3D-kontroller -->
+        <div class="control-group">
+          <div class="control-title">Dimensionsinställningar</div>
+          <div class="checkbox-label">
+            <input type="checkbox" id="3d-mode">
+            <span>Använd 3D-dataset</span>
+          </div>
+          <button id="toggle-3d" class="secondary">Visa 3D-plot</button>
+        </div>
+        
+        <!-- Datasetkontroller -->
+        <div class="control-group">
+          <div class="control-title">Dataset</div>
+          <button id="generate-dataset" class="secondary">Generera dataset</button>
+          <div style="margin-top:10px;">
+            <label for="spread-range" title="1 = tydliga kluster, 100 = helt slumpmässigt">Spridning</label>
+            <input type="range" id="spread-range" min="1" max="100" value="50">
+            <span id="spread-value">50</span>
+          </div>
+        </div>
+        
+        <!-- Klusterinställningar -->
+        <div class="control-group">
+          <div class="control-title">Klusterinställningar</div>
+          <label for="num-centroids">Antal centroider (k):</label>
+          <input type="number" id="num-centroids" min="1" max="10" value="3">
+          <button id="place-centroids">Placera centroider</button>
+        </div>
+        
+        <!-- Iterationskontroller -->
+        <div class="control-group">
+          <div class="control-title">Iterationer</div>
+          <button id="step-forward">Nästa steg</button>
+          <button id="step-back">Föregående steg</button>
+          <button id="reset-iterations">Återställ</button>
+          <button id="auto-run" class="secondary">Kör automatiskt</button>
+        </div>
+      </div>
+      
+      <div class="canvas-container">
+        <canvas id="canvas" width="800" height="600"></canvas>
+        <div id="3d-plot" class="plotly-container"></div>
+      </div>
+    </div>
+    
+    <div class="info-panel">
+      
+    </div>
+  </div>
+
+  <script>
+    // Globala variabler
+    let is3D = false;         // Anger om datasetet ska vara 3D
+    let show3DPlot = false;   // Anger om vi ska visa Plotly (3D) eller canvas (2D)
+    let points = [];          // Array med datapunkter: {x, y, (z)}
+    let originalPoints = [];  // Kopia av ursprungliga punkter
+    let assignments = [];     // Tilldelning av datapunkter till kluster
+    let centroids = [];       // Lista med centroider
+    let initialCentroids = []; // Sparade initiala centroider
+    let iterationHistory = []; // Sparar tillstånd per iteration
+    let k = 0;                // Antal centroider
+    let isRunning = false;    // För automatisk körning
+    let autoRunTimer = null;
+    let autoRunSpeed = 1000;  // Millisekunder mellan iterationer
+
+    // Hjälpfunktion: Skapa punkt (2D eller 3D)
+    function createPoint(x, y, z = null) {
+      return z === null ? {x, y} : {x, y, z};
+    }
+
+    // Box-Muller för normalfördelade slumptal
+    function randn_bm() {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    // Datasetgenerering med stöd för 2D/3D
+    function generateDataset() {
+      const spreadElem = document.getElementById('spread-range');
+      const spread = spreadElem ? parseInt(spreadElem.value) : 50;
+      is3D = document.getElementById('3d-mode').checked;
+      const canvas = document.getElementById('canvas');
+      
+      points = [];
+      originalPoints = [];
+      assignments = [];
+      iterationHistory = [];
+      
+      if (spread === 100) {
+        const numPoints = 100 + Math.floor(Math.random() * 50);
+        for (let i = 0; i < numPoints; i++) {
+          const x = 10 + Math.random() * (canvas.width - 20);
+          const y = 10 + Math.random() * (canvas.height - 20);
+          const z = is3D ? Math.random() * canvas.height : null;
+          points.push(createPoint(x, y, z));
+          assignments.push(undefined);
+        }
+      } else {
+        const numClusters = 3 + Math.floor(Math.random() * 3);
+        let clusterCenters = [];
+        for (let i = 0; i < numClusters; i++) {
+          clusterCenters.push({
+            x: 100 + Math.random() * (canvas.width - 200),
+            y: 100 + Math.random() * (canvas.height - 200),
+            z: is3D ? Math.random() * canvas.height : 0
+          });
+        }
+        const variance = 20 + (spread / 100) * 60;
+        for (let center of clusterCenters) {
+          const numPoints = 25 + Math.floor(Math.random() * 16);
+          for (let j = 0; j < numPoints; j++) {
+            let x = center.x + randn_bm() * variance;
+            let y = center.y + randn_bm() * variance;
+            let z = is3D ? center.z + randn_bm() * variance : 0;
+            x = Math.max(10, Math.min(canvas.width - 10, x));
+            y = Math.max(10, Math.min(canvas.height - 10, y));
+            if (is3D) z = Math.max(0, Math.min(canvas.height, z));
+            points.push(createPoint(x, y, is3D ? z : null));
+            assignments.push(undefined);
+          }
+        }
+      }
+      originalPoints = JSON.parse(JSON.stringify(points));
+      updateVisualization();
+    }
+
+    // Placera centroider med K-means++ logik
+    function placeCentroids() {
+      if (points.length === 0) return alert('Generera dataset först!');
+      k = parseInt(document.getElementById('num-centroids').value || "3");
+      centroids = [];
+      initialCentroids = [];
+      iterationHistory = [];
+      
+      // Välj första centroid slumpmässigt
+      let firstIndex = Math.floor(Math.random() * points.length);
+      centroids.push({...points[firstIndex]});
+      
+      // Välj resterande centroider
+      for (let i = 1; i < k; i++) {
+        let distances = [];
+        let sum = 0;
+        for (let point of points) {
+          let minDist = Infinity;
+          for (let centroid of centroids) {
+            const dx = point.x - centroid.x;
+            const dy = point.y - centroid.y;
+            const dz = is3D ? ((point.z || 0) - (centroid.z || 0)) : 0;
+            const dist = dx * dx + dy * dy + dz * dz;
+            if (dist < minDist) minDist = dist;
+          }
+          distances.push(minDist);
+          sum += minDist;
+        }
+        let threshold = Math.random() * sum;
+        let cumSum = 0;
+        let selectedIndex = distances.findIndex(d => (cumSum += d) >= threshold);
+        if (selectedIndex < 0) selectedIndex = Math.floor(Math.random() * points.length);
+        centroids.push({...points[selectedIndex]});
+      }
+      initialCentroids = JSON.parse(JSON.stringify(centroids));
+      // Spara initialt tillstånd (iteration 0)
+      iterationHistory.push({
+        centroids: JSON.parse(JSON.stringify(centroids)),
+        assignments: [...assignments]
+      });
+      updateVisualization();
+    }
+
+    // Ett K-means iterationsteg: tilldela punkter och uppdatera centroider
+    function kMeansStep() {
+      // Tilldelningssteg
+      assignments = points.map(point => {
+        let minDist = Infinity;
+        let closest = -1;
+        for (let j = 0; j < centroids.length; j++) {
+          const dx = point.x - centroids[j].x;
+          const dy = point.y - centroids[j].y;
+          const dz = is3D ? ((point.z || 0) - (centroids[j].z || 0)) : 0;
+          const dist = dx * dx + dy * dy + dz * dz;
+          if (dist < minDist) {
+            minDist = dist;
+            closest = j;
+          }
+        }
+        return closest;
+      });
+      
+      // Uppdateringssteg: beräkna nya centroider
+      centroids = centroids.map((_, j) => {
+        const clusterPoints = points.filter((_, i) => assignments[i] === j);
+        if (clusterPoints.length === 0) return centroids[j];
+        const sum = clusterPoints.reduce((acc, p) => ({
+          x: acc.x + p.x,
+          y: acc.y + p.y,
+          z: is3D ? ((acc.z || 0) + (p.z || 0)) : 0
+        }), {x: 0, y: 0, z: 0});
+        return {
+          x: sum.x / clusterPoints.length,
+          y: sum.y / clusterPoints.length,
+          z: is3D ? sum.z / clusterPoints.length : 0
+        };
+      });
+      
+      // Spara nuvarande tillstånd
+      iterationHistory.push({
+        centroids: JSON.parse(JSON.stringify(centroids)),
+        assignments: [...assignments]
+      });
+      updateVisualization();
+    }
+
+    // Stega bakåt: återställ till föregående iteration
+    function stepBack() {
+      if (iterationHistory.length > 1) {
+        iterationHistory.pop();
+        const prev = iterationHistory[iterationHistory.length - 1];
+        centroids = JSON.parse(JSON.stringify(prev.centroids));
+        assignments = [...prev.assignments];
+        updateVisualization();
+      }
+    }
+
+    // Återställ till initialt tillstånd (iteration 0)
+    function resetIterations() {
+      if (iterationHistory.length > 0) {
+        const init = iterationHistory[0];
+        centroids = JSON.parse(JSON.stringify(init.centroids));
+        assignments = [...init.assignments];
+        iterationHistory = [init];
+        updateVisualization();
+      }
+    }
+
+    // Automatisk körning
+    function autoRun() {
+      if (isRunning) {
+        clearInterval(autoRunTimer);
+        isRunning = false;
+        document.getElementById('auto-run').textContent = 'Kör automatiskt';
+      } else {
+        isRunning = true;
+        document.getElementById('auto-run').textContent = 'Stoppa';
+        autoRunTimer = setInterval(kMeansStep, autoRunSpeed);
+      }
+    }
+
+    // 2D-visualisering: Rita punkter och centroider på canvas
+    function redraw() {
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Rita datapunkter
+      for (let i = 0; i < points.length; i++) {
+        const pt = points[i];
+        // Om datapunkten har tilldelats ett kluster, använd den färgen; annars grå
+        ctx.fillStyle = assignments[i] !== undefined ? getColor(assignments[i]) : 'rgba(150,150,150,0.6)';
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Rita centroider
+      for (let i = 0; i < centroids.length; i++) {
+        const cen = centroids[i];
+        ctx.fillStyle = getColor(i);
+        ctx.beginPath();
+        ctx.arc(cen.x, cen.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Skriv ut kluster-ID
+        ctx.fillStyle = 'white';
+        ctx.font = "bold 10px Arial";
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(i + 1, cen.x, cen.y);
+      }
+    }
+
+    // 3D-visualisering med Plotly
+    function update3DPlot() {
+      const traces = [];
+      // Organisera datapunkterna per kluster
+      const clusterGroups = {};
+      points.forEach((pt, i) => {
+        const cluster = assignments[i];
+        if (!clusterGroups[cluster]) {
+          clusterGroups[cluster] = {
+            x: [], y: [], z: [],
+            mode: 'markers',
+            type: 'scatter3d',
+            name: `Kluster ${cluster + 1}`,
+            marker: { color: getColor(cluster), size: 4 }
+          };
+        }
+        clusterGroups[cluster].x.push(pt.x);
+        clusterGroups[cluster].y.push(pt.y);
+        clusterGroups[cluster].z.push(pt.z || 0);
+      });
+      traces.push(...Object.values(clusterGroups));
+      
+      // Lägg till centroider
+      traces.push({
+        x: centroids.map(c => c.x),
+        y: centroids.map(c => c.y),
+        z: centroids.map(c => c.z || 0),
+        mode: 'markers',
+        type: 'scatter3d',
+        name: 'Centroider',
+        marker: {
+          color: centroids.map((_, i) => getColor(i)),
+          size: 8,
+          symbol: 'diamond-open'
+        }
+      });
+      
+      const layout = {
+        margin: { l: 0, r: 0, b: 0, t: 30 },
+        scene: {
+          xaxis: { title: 'X' },
+          yaxis: { title: 'Y' },
+          zaxis: { title: 'Z' }
+        }
+      };
+      
+      Plotly.react('3d-plot', traces, layout);
+    }
+
+    // Uppdatera visualiseringen (väljer mellan 2D och 3D)
+    function updateVisualization() {
+      if (show3DPlot && is3D) {
+        update3DPlot();
+      } else {
+        redraw();
+      }
+      updateClusterStats();
+      updateLegend();
+    }
+
+    // Dummy-funktioner för statistik och legend – ersätt med din egen logik om önskas
+    function updateClusterStats() {
+      console.log("Uppdatera klusterstatistik.");
+    }
+    function updateLegend() {
+      console.log("Uppdatera legend.");
+    }
+
+    // Färgfunktion (använder RGBA-strängar för 2D och samma färger för 3D)
+    function getColor(index, opacity = 1) {
+      const colors = [
+        `rgba(66,133,244,${opacity})`,
+        `rgba(219,68,55,${opacity})`,
+        `rgba(15,157,88,${opacity})`,
+        `rgba(244,180,0,${opacity})`,
+        `rgba(171,71,188,${opacity})`,
+        `rgba(255,112,67,${opacity})`,
+        `rgba(25,118,210,${opacity})`,
+        `rgba(0,150,136,${opacity})`,
+        `rgba(92,107,192,${opacity})`,
+        `rgba(240,98,146,${opacity})`
+      ];
+      return colors[index % colors.length];
+    }
+
+    // Hantera toggle av 3D-plot
+    document.getElementById('toggle-3d').addEventListener('click', function() {
+      show3DPlot = !show3DPlot;
+      this.textContent = show3DPlot ? 'Dölj 3D-plot' : 'Visa 3D-plot';
+      document.getElementById('canvas').style.display = show3DPlot ? 'none' : 'block';
+      document.getElementById('3d-plot').style.display = show3DPlot ? 'block' : 'none';
+      if (show3DPlot) update3DPlot();
+      else redraw();
+    });
+
+    // Hantera 3D-läge via checkbox
+    document.getElementById('3d-mode').addEventListener('change', function() {
+      is3D = this.checked;
+      // Om du har t.ex. en Voronoi-knapp, kan du inaktivera den här när 3D är valt
+      clearAll();
+    });
+
+    // Rensa dataset och återställ vyer
+    function clearAll() {
+      points = [];
+      centroids = [];
+      assignments = [];
+      iterationHistory = [];
+      document.getElementById('canvas').style.display = 'block';
+      document.getElementById('3d-plot').style.display = 'none';
+      document.getElementById('toggle-3d').textContent = 'Visa 3D-plot';
+      show3DPlot = false;
+      redraw();
+    }
+
+    // Koppla händelser till knappar
+    document.getElementById('generate-dataset').addEventListener('click', generateDataset);
+    document.getElementById('place-centroids').addEventListener('click', placeCentroids);
+    document.getElementById('step-forward').addEventListener('click', kMeansStep);
+    document.getElementById('step-back').addEventListener('click', stepBack);
+    document.getElementById('reset-iterations').addEventListener('click', resetIterations);
+    document.getElementById('auto-run').addEventListener('click', autoRun);
+
+    // Uppdatera spridningsvärde-display
+    document.getElementById('spread-range').addEventListener('input', function() {
+      document.getElementById('spread-value').textContent = this.value;
+    });
+  </script>
+</body>
+</html>
